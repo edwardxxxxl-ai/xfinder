@@ -1,5 +1,5 @@
 {
-  "name": "x-following-webapp",
+  "name": "x-following-markdown-exporter",
   "version": "1.0.0",
   "private": true,
   "description": "Local web app to export an X account following list as Markdown via Arc.",

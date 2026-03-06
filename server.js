@@ -298,5 +298,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`x-following-webapp listening on http://${HOST}:${PORT}`);
+  console.log(`x-following-markdown-exporter listening on http://${HOST}:${PORT}`);
 });

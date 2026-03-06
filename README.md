@@ -1,4 +1,4 @@
-# X Following Exporter
+# X Following Markdown Exporter
 
 [中文说明](#中文说明) | [English](#english)
 
@@ -46,8 +46,8 @@ This makes the tool easy to run locally, but also tightly couples it to:
 ### Run Locally
 
 ```bash
-git clone https://github.com/edwardxxxxl-ai/x-following-webapp.git
-cd x-following-webapp
+git clone https://github.com/edwardxxxxl-ai/x-following-markdown-exporter.git
+cd x-following-markdown-exporter
 npm start
 ```
 
@@ -146,8 +146,8 @@ Review the code before using it with any sensitive account.
 ### 本地运行
 
 ```bash
-git clone https://github.com/edwardxxxxl-ai/x-following-webapp.git
-cd x-following-webapp
+git clone https://github.com/edwardxxxxl-ai/x-following-markdown-exporter.git
+cd x-following-markdown-exporter
 npm start
 ```
 
