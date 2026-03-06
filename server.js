@@ -9,6 +9,7 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const BEARER_TOKEN =
   "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 const EXPORT_KEY = "codex_following_export_payload";
+const jobs = new Map();
 
 const TOPIC_RULES = [
   { label: "AI", patterns: [" ai ", "llm", "agent", "genai", "machine learning", "artificial intelligence"] },
@@ -304,6 +305,25 @@ async function pollArcHash(prefixes, timeoutMs) {
   throw new Error("Timed out waiting for Arc to finish exporting.");
 }
 
+function createJob() {
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const job = {
+    id,
+    status: "queued",
+    stage: "Queued",
+    progress: 0,
+    createdAt: Date.now(),
+    result: null,
+    error: null,
+  };
+  jobs.set(id, job);
+  return job;
+}
+
+function updateJob(job, patch) {
+  Object.assign(job, patch, { updatedAt: Date.now() });
+}
+
 function buildFetchScript(username) {
   const js = `
     (async () => {
@@ -384,14 +404,16 @@ function buildChunkScript(start, end) {
   return `javascript:${js.replace(/\n\s*/g, " ")}`;
 }
 
-async function collectExportPayload(totalLength) {
-  const chunkSize = 1200;
+async function collectExportPayload(totalLength, onProgress) {
+  const chunkSize = 6000;
   let payload = "";
+  const totalChunks = Math.max(1, Math.ceil(totalLength / chunkSize));
+  let chunkIndex = 0;
 
   for (let offset = 0; offset < totalLength; offset += chunkSize) {
     const end = Math.min(totalLength, offset + chunkSize);
     await setArcUrl(buildChunkScript(offset, end));
-    await sleep(700);
+    await sleep(220);
     const currentUrl = await getArcUrl();
     const marker = `#CHUNK_${offset}_`;
     const markerIndex = currentUrl.indexOf(marker);
@@ -399,6 +421,13 @@ async function collectExportPayload(totalLength) {
       throw new Error(`Failed to read chunk at offset ${offset}.`);
     }
     payload += decodeURIComponent(currentUrl.slice(markerIndex + marker.length));
+    chunkIndex += 1;
+    if (onProgress) {
+      onProgress({
+        stage: `Reading exported payload chunks (${chunkIndex}/${totalChunks})`,
+        progress: 55 + Math.round((chunkIndex / totalChunks) * 35),
+      });
+    }
   }
 
   return payload;
@@ -424,7 +453,13 @@ function normalizeProfiles(rawProfiles) {
   }));
 }
 
-async function exportSingleFollowing(username) {
+async function exportSingleFollowing(username, onProgress, sourceIndex, sourceTotal) {
+  if (onProgress) {
+    onProgress({
+      stage: `Fetching @${username} (${sourceIndex}/${sourceTotal})`,
+      progress: Math.min(50, 5 + Math.round(((sourceIndex - 1) / sourceTotal) * 45)),
+    });
+  }
   await setArcUrl(buildFetchScript(username));
 
   const { hash } = await pollArcHash(["READY_", "ERR_"], 120000);
@@ -437,7 +472,14 @@ async function exportSingleFollowing(username) {
     throw new Error(`Unexpected Arc response: ${hash}`);
   }
 
-  const rawPayload = await collectExportPayload(Number(lengthText));
+  if (onProgress) {
+    onProgress({
+      stage: `Collecting result payload for @${username}`,
+      progress: Math.min(60, 10 + Math.round((sourceIndex / sourceTotal) * 50)),
+    });
+  }
+
+  const rawPayload = await collectExportPayload(Number(lengthText), onProgress);
   const parsedPayload = JSON.parse(rawPayload);
 
   return {
@@ -447,18 +489,31 @@ async function exportSingleFollowing(username) {
   };
 }
 
-async function exportFollowing(usernamesInput) {
+async function exportFollowing(usernamesInput, onProgress) {
   const usernames = sanitizeUsernameList(usernamesInput);
   const initialState = await getArcActiveTabState();
 
   try {
+    if (onProgress) {
+      onProgress({
+        stage: "Opening X in Arc",
+        progress: 2,
+      });
+    }
     await setArcUrl("https://x.com/home");
     await sleep(3000);
 
     const exports = [];
-    for (const username of usernames) {
-      exports.push(await exportSingleFollowing(username));
+    for (const [index, username] of usernames.entries()) {
+      exports.push(await exportSingleFollowing(username, onProgress, index + 1, usernames.length));
       await sleep(800);
+    }
+
+    if (onProgress) {
+      onProgress({
+        stage: "Merging profiles and computing discovery ranking",
+        progress: 92,
+      });
     }
 
     const profileMap = new Map();
@@ -574,11 +629,47 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && req.url.startsWith("/api/jobs/")) {
+      const jobId = req.url.split("/").pop();
+      const job = jobs.get(jobId);
+      if (!job) {
+        sendJson(res, 404, { error: "Job not found" });
+        return;
+      }
+      sendJson(res, 200, job);
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/api/export") {
       const rawBody = await readRequestBody(req);
       const body = rawBody ? JSON.parse(rawBody) : {};
-      const result = await exportFollowing(body.usernames || body.username);
-      sendJson(res, 200, result);
+      const job = createJob();
+      updateJob(job, {
+        status: "running",
+        stage: "Starting export",
+        progress: 1,
+      });
+
+      exportFollowing(body.usernames || body.username, (patch) => updateJob(job, patch))
+        .then((result) => {
+          updateJob(job, {
+            status: "completed",
+            stage: "Completed",
+            progress: 100,
+            result,
+          });
+        })
+        .catch((error) => {
+          console.error(error);
+          updateJob(job, {
+            status: "failed",
+            stage: "Failed",
+            progress: 100,
+            error: error.message || "Unknown error",
+          });
+        });
+
+      sendJson(res, 202, { jobId: job.id });
       return;
     }
 

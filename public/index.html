@@ -101,6 +101,29 @@
         json: "x-following.json",
         brief: "x-following-brief.md",
       };
+      let activeJobId = null;
+
+      async function pollJob(jobId) {
+        while (true) {
+          const response = await fetch("/api/jobs/" + jobId);
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.error || "Failed to read export job");
+          }
+
+          setStatus((payload.stage || "Working") + " · " + (payload.progress || 0) + "%", payload.status === "failed" ? "error" : "loading");
+
+          if (payload.status === "completed") {
+            return payload.result;
+          }
+
+          if (payload.status === "failed") {
+            throw new Error(payload.error || "Export failed");
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 900));
+        }
+      }
 
       function renderOutput() {
         output.textContent = currentOutputs[currentView] || "";
@@ -185,7 +208,7 @@
         }
 
         setBusy(true);
-        setStatus("Switching through Arc and analyzing multiple follow graphs...", "loading");
+        setStatus("Creating export job...", "loading");
         output.textContent = "";
         outputTitle.textContent = "Export in progress";
         outputMeta.textContent = "Collecting bios, counts, overlap, and topic signals.";
@@ -201,17 +224,20 @@
             body: JSON.stringify({ usernames }),
           });
           const payload = await response.json();
-          if (!response.ok) {
+          if (response.status !== 202) {
             throw new Error(payload.error || "Export failed");
           }
+          activeJobId = payload.jobId;
+          setStatus("Job created · 1%", "loading");
+          const result = await pollJob(activeJobId);
 
-          currentOutputs = payload.outputs;
-          currentFiles = payload.files;
+          currentOutputs = result.outputs;
+          currentFiles = result.files;
           renderOutput();
-          outputTitle.textContent = payload.usernames.length + " seeds · " + payload.total + " accounts · " + payload.overlapCount + " overlaps";
+          outputTitle.textContent = result.usernames.length + " seeds · " + result.total + " accounts · " + result.overlapCount + " overlaps";
           outputMeta.textContent = "Includes bio, followers, topic labels, overlap count, discovery score, JSON export, and a research brief.";
-          sourceSummary.textContent = "Sources: " + payload.usernames.map((name) => "@" + name).join(", ");
-          renderInsights(payload);
+          sourceSummary.textContent = "Sources: " + result.usernames.map((name) => "@" + name).join(", ");
+          renderInsights(result);
           setStatus("Export complete.", "success");
           copyButton.disabled = false;
           downloadButton.disabled = false;
@@ -224,6 +250,7 @@
           insights.hidden = true;
           setStatus(error.message, "error");
         } finally {
+          activeJobId = null;
           setBusy(false);
         }
       });
